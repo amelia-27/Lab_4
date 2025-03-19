@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import dash
 from dash import Dash, dcc, html, dash_table, Input, Output, State, callback_context
 import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
@@ -6,7 +7,7 @@ import pandas as pd
 
 app = Dash(
     __name__,
-    external_stylesheets=[dbc.themes.SPACELAB, dbc.icons.FONT_AWESOME],
+    external_stylesheets=[dbc.themes.DARKLY, dbc.icons.FONT_AWESOME],
 )
 
 #  make dataframe from  spreadsheet:
@@ -16,9 +17,11 @@ MAX_YR = df.Year.max()
 MIN_YR = df.Year.min()
 START_YR = 2007
 
+concat_year = pd.DataFrame({"Year" : [MIN_YR - 1]})
 # since data is as of year end, need to add start year
 df = (
-    df.append({"Year": MIN_YR - 1}, ignore_index=True)
+    #df.append({"Year": MIN_YR - 1}, ignore_index=True)
+    pd.concat([concat_year, df], ignore_index=False)
     .sort_values("Year", ignore_index=True)
     .fillna(0)
 )
@@ -177,28 +180,41 @@ Figures
 """
 
 
-def make_pie(slider_input, title):
-    fig = go.Figure(
-        data=[
-            go.Pie(
-                labels=["Cash", "Bonds", "Stocks"],
-                values=slider_input,
-                textinfo="label+percent",
-                textposition="inside",
-                marker={"colors": [COLORS["cash"], COLORS["bonds"], COLORS["stocks"]]},
-                sort=False,
-                hoverinfo="none",
-            )
-        ]
-    )
+def make_stacked_bar(slider_input, title):
+    options = ["Cash", "Bonds", "Stocks"]
+    colors = [COLORS["cash"], COLORS["bonds"], COLORS["stocks"]]
+    data=[
+        go.Bar(
+            x= [slider_input[i]],
+            y= ["Asset"],
+            orientation = "h",
+            marker=dict(
+                color=colors[i],
+                line=dict(color=colors[i], width=6),
+            ),
+            hoverinfo="none",
+            textposition="auto",
+            text=[options[i]],
+        )
+        for i in range(len(options))
+    ]
+    fig = go.Figure(data=data)
+
     fig.update_layout(
         title_text=title,
         title_x=0.5,
         margin=dict(b=25, t=75, l=35, r=25),
         height=325,
         paper_bgcolor=COLORS["background"],
+        showlegend = False,
+       # transition= "h",
+        barmode = "stack",
+        xaxis_title = "Percent",
+      #  yaxis_range= 100,
     )
     return fig
+
+
 
 
 def make_line_chart(dff):
@@ -282,6 +298,7 @@ slider_card = dbc.Card(
             step=5,
             value=10,
             included=False,
+            updatemode = "mouseup"
         ),
         html.H4(
             "Then set stock allocation % ",
@@ -296,7 +313,21 @@ slider_card = dbc.Card(
             step=5,
             value=50,
             included=False,
+            updatemode = "mouseup"
         ),
+        html.H4(
+            "Resulting Bonds Allocation %",
+            className = "card-title mt-3"
+        ),
+        html.Div(
+            id = "bonds-allocation",
+            className = "lead"
+        ),
+        dcc.Store(id = "store-history", storage_type = "memory"), #used for storage
+        dbc.Button("Go Back",
+                   id = "go-back-button",
+                   className = "mt-3"
+                   )
     ],
     body=True,
     className="mt-4",
@@ -449,6 +480,17 @@ learn_card = dbc.Card(
     className="mt-4",
 )
 
+# ======== History Tab Components (what I added)
+history_card = dbc.Card(
+    [
+        dbc.CardHeader("Previous settings will show here"),
+        dbc.CardBody([html.Div(id ="history-display"),
+                      dcc.Store(id="store-input-history"),
+                      html.Div(id="input-history-display") #this piece sets placeholder in initial layout to solve error
+        ]) #need another callback?
+    ],
+    className = "mt-4",
+)
 
 # ========= Build tabs
 tabs = dbc.Tabs(
@@ -460,7 +502,12 @@ tabs = dbc.Tabs(
             label="Play",
             className="pb-4",
         ),
-        dbc.Tab([results_card, data_source_card], tab_id="tab-3", label="Results"),
+        dbc.Tab([results_card, data_source_card], tab_id="tab-3", label="Results"
+        ),
+        dbc.Tab( [history_card],
+            tab_id = "tab-4",
+            label = "History"
+        ),
     ],
     id="tabs",
     active_tab="tab-2",
@@ -512,11 +559,11 @@ def backtest(stocks, cash, start_bal, nper, start_yr):
             dff.loc[yr, "Cash"] = dff.loc[yr, "Cash"] * (
                 1 + dff.loc[yr, "3-mon T.Bill"]
             )
-            dff.loc[yr, "Stocks"] = dff.loc[yr, "Stocks"] * (1 + dff.loc[yr, "S&P 500"])
-            dff.loc[yr, "Bonds"] = dff.loc[yr, "Bonds"] * (
+            dff.loc[yr, "Stocks"] = (dff.loc[yr, "Stocks"] * (1 + dff.loc[yr, "S&P 500"]))
+            dff.loc[yr, "Bonds"] = (dff.loc[yr, "Bonds"] * (
                 1 + dff.loc[yr, "10yr T.Bond"]
-            )
-            dff.loc[yr, "Total"] = dff.loc[yr, ["Cash", "Bonds", "Stocks"]].sum()
+            ))
+            dff.loc[yr, "Total"] = int(dff.loc[yr, ["Cash", "Bonds", "Stocks"]].sum())
 
     dff = dff.reset_index(drop=True)
     columns = ["Cash", "Stocks", "Bonds", "Total"]
@@ -568,19 +615,27 @@ Main Layout
 app.layout = dbc.Container(
     [
         dbc.Row(
-            dbc.Col(
-                html.H2(
-                    "Asset Allocation Visualizer",
-                    className="text-center bg-primary text-white p-2",
+                dbc.Col(
+                    html.H2(
+                        "Asset Allocation Visualizer",
+                        className="text-center bg-primary text-white p-2",
+                    ),
                 ),
-            )
+        ),
+        dbc.Row(
+            dbc.Col(
+                html.H4(
+                    "Amelia Ubben - CS150: Community Action Computing",
+                    className = "text-center bg-primary text-white p-2",
+                ),
+            ),
         ),
         dbc.Row(
             [
                 dbc.Col(tabs, width=12, lg=5, className="mt-4 border"),
                 dbc.Col(
                     [
-                        dcc.Graph(id="allocation_pie_chart", className="mb-2"),
+                        dcc.Graph(id="allocation_stacked_bar", className="mb-2"),
                         dcc.Graph(id="returns_chart", className="pb-4"),
                         html.Hr(),
                         html.Div(id="summary_table"),
@@ -603,14 +658,160 @@ app.layout = dbc.Container(
 ==========================================================================
 Callbacks
 """
+#added callback for history tab - simply to form it - SLIDER HISTORY
+@app.callback(
+    Output("store-history", "data"),
+    [Input("cash", "value"),
+     Input("stock_bond", "value")],
+    [State("store-history", "data")]
+)
 
+#added function for the history callback
+def update_stored_history(cash_value, stock_value, history): #add more components!
+    if history is None:
+        history = []
+
+    bonds_allocation = 100 - stock_value - cash_value
+    new_history_record_slider = {
+        "cash" : cash_value,
+        "stock_bond": stock_value,
+        "bonds": bonds_allocation,
+    }
+    new_history_record_text = {
+
+    }
+    history.append(new_history_record_slider)
+    return history
+
+#callback for displaying the history we already formed (SLIDER)
+@app.callback(
+    Output("history-display", "children"),
+    Input("store-history", "data")
+)
+
+#for display (SLIDER)
+def update_display_history(history):
+    if not history:
+        return "Interact with the slider to see your history"
+
+    display_items = [
+        html.Li(
+            f" Cash = {instance['cash']}%, "
+            f" Stock = {instance['stock_bond']}%, "
+            f" Bond = {instance['bonds']}%, "
+            #add more here from prev. function
+        )
+        for instance in reversed(history)
+    ]
+    return f"Slider items ordered most recent to oldest:", html.Ul(display_items)
+
+#added callback for history tab - simply to form it - FOR INPUT TEXT
+@app.callback(
+    Output("store-input-history", "data"),
+    [Input("starting_amount", "value"),
+     Input("start_yr", "value"),
+     Input("planning_time", "value")],
+    [State("store-input-history", "data")]
+)
+
+#added function for the history callback FOR INPUT TEXT
+def update_stored_input_history(starting_amount, start_yr, planning_time, history): #add more components!
+    if history is None:
+        history = []
+
+    new_history_record_input = {
+        "starting_amount" : str(starting_amount),
+        "start_yr": str(start_yr),
+        "planning_time": str(planning_time),
+    }
+    new_history_record_text = {
+
+    }
+    history.append(new_history_record_input)
+    return history
+
+#callback for displaying the history we already formed (FOR INPUT TEXT)
+@app.callback(
+    Output("input-history-display", "children"),
+    Input("store-input-history", "data")
+)
+
+#for display FOR INPUT TEXT
+def update_display_history_input(history):
+    if not history:
+        return "Interact with the textboxes to see your history"
+
+    display_items = [
+        html.Li(
+            f" Start Amount = {instance['starting_amount']}%, "
+            f" Start Year = {instance['start_yr']}%, "
+            f" Planning Time = {instance['planning_time']}%, "
+            #add more here from prev. function
+        )
+        for instance in reversed(history)
+    ]
+    return html.P(f"Textbox items ordered most recent to oldest:"), html.Ul(display_items)
+
+#added call back for previous settings button
+@app.callback(
+    [
+        Output("cash", "Value", allow_duplicate=True),
+        Output("stock_bond", "value", allow_duplicate=True),
+        Output("starting_amount", "value", allow_duplicate=True),
+        Output("start_yr", "value", allow_duplicate=True),
+        Output("planning_time", "value", allow_duplicate=True),
+        Output("store-slider-history", "data", allow_duplicate=True),
+        Output("store-input-history", "data", allow_duplicate=True),
+    ],
+    [Input("go-back-button", "n_clicks"),],
+    [State("store-history", "data"),
+     State("store-input-history", "data")],
+    prevent_initial_call=True
+)
+
+#function for previous settings button
+def previous_settings(n_clicks, slider_history, input_history):
+    if not n_clicks or len(slider_history) < 2:
+        raise dash.exceptions.PreventUpdate
+
+        #for the slider (sets slider back for cash and stocks
+    previous_slider_settings = slider_history[-2]
+    previous_cash = previous_slider_settings["cash"]
+    previous_stock_bond = previous_slider_settings["stock_bond"]
+
+    previous_input = input_history[-2]
+    previous_starting_amount = previous_input["starting_amount"]
+    previous_start_yr = previous_input["start_yr"]
+    previous_planning_time = previous_input["planning_time"]
+
+    return(
+        previous_cash,
+        previous_stock_bond,
+        previous_starting_amount,
+        previous_start_yr,
+        previous_planning_time,
+    )
+
+
+#added callback for the bonds-allocation
+@app.callback(
+    Output("bonds-allocation", "children"),
+    Input("cash", "value"),
+    Input("stock_bond", "value"),
+)
+
+
+#added function for bonds-allocation
+def update_bond_value(cash_value, stock_value):
+      bonds_allocation = 100 - stock_value - cash_value
+      return f"{bonds_allocation}"
 
 @app.callback(
-    Output("allocation_pie_chart", "figure"),
+    Output("allocation_stacked_bar", "figure"),
     Input("stock_bond", "value"),
     Input("cash", "value"),
 )
-def update_pie(stocks, cash):
+def update_bar(stocks, cash):
     bonds = 100 - stocks - cash
     slider_input = [cash, bonds, stocks]
 
@@ -620,7 +821,7 @@ def update_pie(stocks, cash):
         investment_style = "Conservative"
     else:
         investment_style = "Moderate"
-    figure = make_pie(slider_input, investment_style + " Asset Allocation")
+    figure = make_stacked_bar(slider_input, investment_style + " Asset Allocation")
     return figure
 
 
@@ -713,4 +914,4 @@ def update_totals(stocks, cash, start_bal, planning_time, start_yr):
 
 
 if __name__ == "__main__":
-    app.run_server(debug=True)
+    app.run(debug=True)
